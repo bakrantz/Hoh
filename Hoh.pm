@@ -86,6 +86,8 @@ sub add_columns {
   return $self
 }
 
+sub add_column { add_columns(@_) } 
+
 #works in scalar or array mode
 sub clean_column_names {
  my @dirties = @_;
@@ -1258,3 +1260,257 @@ sub first_line {
 }
 
 return 1;
+
+__END__
+
+=pod
+
+=head1 NAME
+
+Hoh - Hash of hashes datasheet processing and plotting environment
+
+=head1 VERSION
+
+version 0.10
+
+Very roughed out at the moment, yet it is functional.
+
+=head1 SYNOPSIS
+
+  my $hoh = Hoh -> new();
+  $hoh -> delimiter($tab);
+  $hoh -> load($filename);
+
+=head1 DESCRIPTION
+
+Hoh (Hash of hashes) fills the need to have plain text readable data files that can be opened and 
+manipulated as columns of data. Two-dimensional data manipulation is very useful and does lend to
+the use of human-readable intermediate file formats for quick inspection.
+
+In this module, column math can be carried out. Columns can be added or deleted. 
+The Hoh can be sorted, and the columns can be printed in any predefined order. 
+Statistics can be computed on the columns. Columns can be histogrammed or binned linearly, 
+logarithmically, or by user set bin dimensions. Bins can be saved as flat files for later processing. 
+Statistical summary sheets can be saved. Data may be plotted using the external module L<Chart::Clicker>.
+
+The module handles CSV files, tab- or white-space separated or any user-defined delimiter.
+The delimiter choice does require forethought when making the data file in the first place to avoid 
+splitting columns improperly. A clever user may choose a special white-space character if they suspect tab 
+is being used inside data items.
+
+Large files are supported. I tested several MB. If you want much larger, then other Tied modules
+would suit you better. I could add that support here, but at the moments most files are under 10 MB.
+
+Some special file formats are supported, including loading of Axon Text File (ATF) format. Its header
+is properly parsed. Chimera attribute output files can also be produced that can be opened in UCSF Chimera.
+
+=head1 FLAT FILE FORMATS SUPPORTED BY HOH
+
+There are some tricks to understanding this module and how different flat file formats are to be
+processed by it, since it handles many different file structures. One should read up on what
+a hash of hashes is like in Perl. L<See the Perl Data Structure Cookbook|http://perldoc.perl.org/perldsc.html>.
+
+=head2 Simple numerical flat data file
+
+Example of a very simple plain-text file for Hoh.pm to parse:
+    
+    0,1,3
+    3,5,10
+    11,44,12
+    3,32,0
+    -1,33,0.3
+    
+Here there are no legal column names, and Hoh will know because the first line is not written with leading 
+alphabetical characters in each of the columns. Basically, if a file is just a series of columns of numbers, 
+then one would want to ask the Hoh object to add row keys (i.e. attribute generate_keys(1)) to the data upon 
+input. These row keys are the hash keys in the first dimension. Column names or the column keys are 
+automatically generated then starting at A, B, C ...
+
+=head2 Numerical flat data file with named columns
+
+The next level of sophistication is this file type:
+    
+    X,Y,Z
+    0,1,3
+    3,5,10
+    11,44,12
+    3,32,0
+    -1,33,0.3
+
+Hoh slurps it up and considers the X,Y,Z the names of the columns. If the names collided
+the Hoh has a fancy routine to prevent name collisions. Again it is recommended for this file type to set the
+attribute generate_keys(1) to true to avoid converting column X into the row keys column. The result
+may not be desired.
+
+=head2 Numerical flat data file with named rows
+
+The row keys may be explicitly given in the first column. For example:
+
+    KEY1,0,1,3
+    KEY2,3,5,10
+    KEY3,11,44,12
+    KEY4,3,32,0
+    KEY5,-1,33,0.3
+
+Now, it may be desirable to set generate_keys(0) to false, especially if you would like to merge two datasets as
+Hohs overwriting missing pieces of data or some activity that requires coordination of the row index keys. 
+On the other hand, if you want to append two flat data files then you may want to set generate_keys(1) to true,
+because the method it uses is to concatenate the name of the file with the row number as the row key. This way
+two files can be stacked without likely having key collisions.
+
+=head2 ATF flat data file
+
+This file format is support well. It uses a header with tab-separated columns. For example: 
+
+   ATF	1.0
+   7	3     
+   "AcquisitionMode=Gap Free"
+   "Comment="
+   "YTop=10000,1000"
+   "YBottom=-10000,-1000"
+   "SweepStartTimesMS=0.000"
+   "SignalsExported=Im_Scaled,10_mv"
+   "Signals="	"Im_Scaled"	"10_mv"
+   "Time (s)"	"Trace #1 (pA)"	"Trace #1 (mV)"
+   0.000	111.694	19.7754
+   0.001	112.000	19.7144
+   0.002	112.000	19.7754
+   0.003	112.305	19.7754
+
+Hoh has a file-test and pre-open routine to scan the file for its header and open it properly even if the extension was
+removed or mangled at some point. The second line says 7 3, which means 7 more lines of junk, then the column names. The 
+3 means 3 columns. Hoh parses these column names in a time, current, voltage trace to rename them as T,I,V. 
+
+By the way, all files are converted to MS-DOS line endings to allow for MAC, PC, POSIX cross-platform opening of text files.
+
+=head1 SAVING HOH DATA TO A FLAT FILE
+
+=head2 Using the print_order attribute
+
+By now the idea of this module should be clear to open flat files into a hoh, use the magic of Perl on the hoh, including these
+methods and other methods in other modules, then to save the output results as a flat file that is very human readable (if you like).
+To get the columns printed in a specific order, you specify them in the print_order attribute, which expects a list of valid column
+names. You can also specify a file set in the print_order_file attribute to load this list of names. That file can have a tab-, 
+space-, or line-ending-separated format to list the column names in the order to be printed. 
+
+   $hoh -> print_order( qw( A B C X D W ));
+
+=head2 Sorting the rows
+
+The data will be sorted automatically to the order the rows were read from the input file unless you called a sort_hoh 
+method on one of the columns. In that case, the output file will be saved using the sorted row keys.
+
+   $hoh -> sort_hoh('D',1,0); #descending numerical <=> sort
+   $hoh -> sort_hoh('C',0,1); #ascending alphalexical cmp sort
+
+=head2 Using the filekeys attribute
+
+Upon printing your Hoh data to the flat file, you may not want to see the internal ugliness of the keys anymore, especially
+if you generated them upon loading. If you do not, then set filekeys(0) to false. 
+
+   $hoh -> filekeys(0);
+
+=head2 Save the file
+
+Saving the file is simple. You could disable the header line with the column names if you wanted to, but you should be sure
+you are using a good delimiter for your dataset.
+
+   $hoh -> filekeys(0); #do not display row keys in the file
+   $hoh -> delimiter("\t"); #tab delimited 
+   $hoh -> print_order( qw( A B C X D W ));
+   $hoh -> sort_hoh('D',0,0); #ascending numerical <=> sort
+   $hoh -> header_off(0); #default is false anyway
+   $hoh -> save('output-flat-file.txt');
+
+Or you can pass all the arguments in one big line:
+
+   $hoh -> save('output-flat-file.txt', \@print_order_array, $sort_col, $header_bool, "\t", $filekeys_bool);
+
+It is cumbersome at the moment that arguments are not passed as hashes in any order. That is a design flaw to work out in the
+future. Or just use the attributes and forget about it.
+
+=head1 ATTRIBUTES
+
+=head2 delimiter
+
+Column separator in the flat file to be opened and parsed by L<Hoh>.
+
+=head2 hoh
+
+The Hoh data structure returned as a Hash of hashes. The basic architecture is:
+
+   my %hash = $hoh -> hoh;
+   my $data_point = $hash{$row}{$col};
+
+The row keys are either those issued by you in the loaded flat file as the first
+column. Or if you set the generate_keys attribute to true, then the keys are
+auto-generated by Hoh for you. These row keys can remain invisible to you upon saving.
+To turn them off at that point just set the file_keys attribute to false.
+
+=head1 METHODS
+
+=head2 add_columns
+
+Add one or more sparkling new columns. Pass it a list of names:
+
+   $hoh -> add_columns(qw( A B C D E ZZ_TOP ));
+   $hoh -> add_columns( '2_more' ); #will work but parser will add A in front of name
+   $hoh -> add_column( 'SynName' ); #alias works too
+
+As the above example warns, avoid using characters outside [A-Z][a-z][0-9] and [_] 
+(underscore). Those characters outside of the acceptable set are deleted. I 
+recommend using ALL CAPS and leaving the case_sensitive attribute to false (default). 
+This just makes life easier. Also the first character of a column key name should not
+be a number. If it is, then Hoh will say, "I'm sorry, Dave. I'm afraid I can't do that", 
+and it will place a letter in front of your column name. 
+
+Why all these rules? Well, Hoh was written to inteface with other software that follows
+this naming convention.
+
+=head2 add_scalar_column
+
+Adds a new column and sets it to the desired scalar value. Can be used to reset an
+existing column to a new value or can clear that column if set to undef.
+
+   $hoh -> add_scalar_column('NewOne', 42);
+  
+=head2 column
+
+Returns the named column's values. The only argument is the column name itself. 
+The hoh data are by their nature pseudorandom, and thus the data can be pre-sorted
+by issuing a sort_hoh method prior to calling the column method. The last sort is remembered.
+This method does return the list of values as an @array.
+
+   my @column_data = $hoh -> column('X');
+   
+In some sense, column acts like an attribute, but I am calling it a method.
+
+=head2 column_math
+
+Performs column math on the Hoh by using 'col(column_name)' notation. For example:
+
+   my $hoh = Hoh -> new();
+   $hoh -> delimiter(','); #comma-separated file
+   $hoh -> load('XYZ-data.txt'); #dataset with X, Y, and Z headed columns
+   $hoh -> add_column('A'); #add new empty column called 'A'
+   $hoh -> column_math('A', 'col(X) + col(Y) * col(Z) - sin(col(X))');
+   
+Simple column math routine for Hoh using native Perl interpreter, allowing for
+application of any Perl function, except 'col'. First argument is where the result goes; 
+second is the column math itself written as above.
+
+=head1 AUTHOR
+
+Bryan Krantz <bakrantz@gmail.com>
+
+=head1 COPYRIGHT AND LICENSE
+
+Copyright (c) 2014 Bryan Krantz
+
+This software is licensed under the Artistic License 2.0
+
+This is free software; you can redistribute it and/or modify it under
+the same terms as the Perl 5 programming language system itself.
+
+=cut
+
