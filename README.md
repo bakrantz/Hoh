@@ -97,7 +97,7 @@ collisions, since the files cannot have the same path/filename.
 
 ## ATF flat data file
 
-This file format is support well. It uses a header with meta data and tab-separated columns. For example: 
+This file format is supported well. It uses a header with meta data and tab-separated columns. For example: 
 
     ATF  1.0
     7    3     
@@ -248,6 +248,28 @@ the second argument is the column math itself written as above. I know that at t
 not something that is safe to do security wise, and I would appreciate comments on how
 to have this powerful feature without compromising the security too much.
 
+## cs
+
+This is largely an internal method that operates on strings to set them to the appropriate
+case-senstivity given the setting of the boolean attribute ["case\_sensitive"](#case_sensitive). I describe it in detail to 
+understand how case-sensitivity is dealt with remember the default is for ["case\_sensitive"](#case_sensitive) is `0`, which
+means the keys of the hash and text data are converted to ALL CAPS:
+
+    my $text = 'A case-Sensitive phrase.';
+    $hoh -> case_sensitive(1); #set to true
+    my $cs_text = $hoh -> cs($text);
+    print $cs_text; #shows 'A case-Sensitive phrase.'
+
+But
+
+    my $text = 'A case-Insensitive phrase.';
+    $hoh -> case_sensitive(0); #set to false
+    my $cs_text = $hoh -> cs($text);
+    print $cs_text; #shows 'A CASE-INSENSITIVE PHRASE.'
+
+This method is internally evaluated throughout many of the methods, and it can lead to bugs if you are
+not in tune with using ALL CAPS by default.
+
 ## extract\_column\_names
 
 Method is run to re-extract the column names after changing them with various methods above.
@@ -346,11 +368,115 @@ $file, $print\_order, $sort\_column, $header\_off, $delimiter, $fileKeys
 
 This method sorts the ["hoh"](#hoh) data structure according to any selected column. The method has three arguments:
 
-    $hoh -> sort_hoh($sort_column, $sort_order, $sort_type);
+    my %sorted_hash = $hoh -> sort_hoh($sort_column, $sort_order, $sort_type) -> hoh;
 
 But you set these attributes in the [Hoh](https://metacpan.org/pod/Hoh) object itself. The ["sort\_column"](#sort_column) is the column used to determine
 the sort order of the hoh. The ["sort\_order"](#sort_order) is a boolean where 0 is ascending and 1 is descending. Finally,
 ["sort\_type"](#sort_type) is a boolean where 0 is numerical `<=>` and 1 is lexicographical `cmp`.
+
+## statistics\_log\_bin
+
+This method creates a series of log-scale-spaced bins across the selected column data range.
+
+    my ($bin_col, $bins_per_decade, $cols_to_avg) = ('E', 30, [ qw(A B C D E) ] );
+    my %stats = $hoh -> statistics_log_bin($bin_col, $bins_per_decade, $cols_to_avg) -> statistics;
+
+The method takes three arguments. The scalar column to use for binning (required), the scalar number 
+of bins per decade (required), and the array\_ref list of columns to average (defaults to all columns 
+if not specified). This statistics method and those that follow create a hash statistical data on each 
+of the bins: count, sum, mean, variance, standard deviation, sum of squares, and mean sum of squares. 
+These results of the binning (histogramming) process are recorded in the ["statistics"](#statistics) attribute, 
+which is a hash that is accessed as shown in the code example above. The keys to the hash are set as 
+'BIN'.$index where $index starts at zero and autoincrements.
+
+## statistics\_linear\_bin
+
+This method creates a series of linear-scale-spaced bins across the selected column data range.
+
+    my $tolerance = 2;
+    my %stats = $hoh -> statistics_linear_bin($bin_col, $tolerance, $cols_to_avg) -> statistics;
+
+Here the tolerance argument of the method is the linear step size for each bin. For example, if the 
+data range in the column used for binning covers 1-100, then a tolerance value of 2 would create about 
+50 bins. The columns to average argument is like stated above in ["statistics\_log\_bin"](#statistics_log_bin). Again upon 
+execution, the resulting statistics are access in the ["statistics"](#statistics) attribute as shown above.
+
+## statistics\_bin\_tolerance
+
+This method creates a series of bins across the selected column data range given a list of values to bin around
+and a tolerance. The method effectively reduces a dataset by binning and averaging data that fit within each
+of the bins set by the array ref, $bin, +/- the scalar tolerance $tol.
+
+    my $bins = [ 10, 20, 30, 40, 55 ];
+    my $tolerance = 1;
+    my %stats = $hoh -> statistics_bin_tolerance($bin_col, $bins, $tolerance, $cols_to_avg) -> statistics;
+
+The arguments are the same as above, where the new argument $bins is added (an array reference to a list of bin centers).
+Thus in this method data are binned based on the bin center and the tolerance as plus or minus the bin center. The bins
+will be in this example:
+
+    BIN1 9 - 11
+    BIN2 19 - 21
+    BIN3 29 - 31
+    BIN4 29 - 41
+    BIN5 54 - 56
+
+## bin\_search
+
+This method allows for statistical analysis of user selected bins. Using the case above, one could manually define the bins
+as:
+
+    @bins = (
+             [9, 11],
+             [19, 21],
+             [29, 31],
+             [29, 41],
+             [54, 56],
+            );
+    $hoh -> bins(@bins);
+    $hoh -> binned_column('X'); #setting the attribute to the binned column (data used to sort into bins)
+    my %stats = $hoh -> bin_search -> compute_statistics_on_bins -> statistics;
+
+Or the functional method call for this example is:
+
+    my %stats = $hoh -> bin_search(\@bins, 'X') -> compute_statistics_on_bins -> statistics;
+
+Thus with this method and arbitrary arrangement of bins can be constructed and analyzed. As noted in the above
+examples a second method, ["compute\_statistics\_on\_bins"](#compute_statistics_on_bins), was invoked to compute all the statistics. 
+The ["bin\_search"](#bin_search) method just dumps the data into the statistics hash initially. To get more advanced analysis
+(if you need it) you then invoke the ["compute\_statistics\_on\_bins"](#compute_statistics_on_bins) method in series. The ["statistics"](#statistics) hash
+is modified appropriately.
+
+## compute\_statistics\_on\_bins
+
+This method is used in manual bin averaging of the data. It is called typically after a ["bin\_search"](#bin_search) method.
+See above code example for ["bin\_search"](#bin_search).
+
+## save\_statistics
+
+Method that is called to save the ["statistics"](#statistics) to a formatted text file that is [Hoh](https://metacpan.org/pod/Hoh) compatible. There are
+four arguments:
+
+    $hoh -> save_statistics($file_out, $print_order, $stats_print_order, $delimiter);
+
+The first is the scalar for a `path/to/file-out-name` (required), which can be specified in the <L/file\_out> 
+attribute. The second is an array reference to the print order (not required), which as described above is
+the <L/print\_order> attribute. The third is a statistics print order array reference (not required), which 
+is the order of particular statistical quanities that are to be printed in the flat file. The statistics hash 
+is larger than two-dimensions, and some ordering of the output is required to make it two-dimensional. 
+The default is `['MEAN', 'STANDARD_DEVIATION']`, which yields the average of the column for that bin and the standard 
+deviation (error). Finally, the delimiter (not required) is also found in the ["delimiter"](#delimiter) attribute. As always,
+these arguments can be left out if they were pre-set in the corresponding attributes.
+
+## save\_as\_chimera\_attribute
+
+This method is a way to convert a given column in the ["hoh"](#hoh) to a UCSF `CHIMERA` attribute. 
+See [http://www.cgl.ucsf.edu/chimera/](http://www.cgl.ucsf.edu/chimera/) for information on the purpose of attributes. Note to use this script, 
+the input file must be specified with the residues listed as the keys in the first column. The file is loaded 
+with the ["generate\_keys"](#generate_keys) attribute set to `0`. Then a column with the attribute values is selected for export 
+to the attribute file. The output filename is generated from the chimera attribute name argument:
+
+    $hoh -> save_as_chimera_attribute($chimera_attribute_name, $col_with_attribute);
 
 # AUTHOR
 
