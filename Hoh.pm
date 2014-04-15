@@ -1363,7 +1363,7 @@ collisions, since the files cannot have the same path/filename.
 
 =head2 ATF flat data file
 
-This file format is support well. It uses a header with meta data and tab-separated columns. For example: 
+This file format is supported well. It uses a header with meta data and tab-separated columns. For example: 
 
    ATF	1.0
    7	3     
@@ -1511,6 +1511,28 @@ the second argument is the column math itself written as above. I know that at t
 not something that is safe to do security wise, and I would appreciate comments on how
 to have this powerful feature without compromising the security too much.
 
+=head2 cs
+
+This is largely an internal method that operates on strings to set them to the appropriate
+case-senstivity given the setting of the boolean attribute L</case_sensitive>. I describe it in detail to 
+understand how case-sensitivity is dealt with remember the default is for L</case_sensitive> is C<0>, which
+means the keys of the hash and text data are converted to ALL CAPS:
+
+   my $text = 'A case-Sensitive phrase.';
+   $hoh -> case_sensitive(1); #set to true
+   my $cs_text = $hoh -> cs($text);
+   print $cs_text; #shows 'A case-Sensitive phrase.'
+
+But
+
+   my $text = 'A case-Insensitive phrase.';
+   $hoh -> case_sensitive(0); #set to false
+   my $cs_text = $hoh -> cs($text);
+   print $cs_text; #shows 'A CASE-INSENSITIVE PHRASE.'
+
+This method is internally evaluated throughout many of the methods, and it can lead to bugs if you are
+not in tune with using ALL CAPS by default.
+
 =head2 extract_column_names
 
 Method is run to re-extract the column names after changing them with various methods above.
@@ -1609,11 +1631,115 @@ $file, $print_order, $sort_column, $header_off, $delimiter, $fileKeys
 
 This method sorts the L</hoh> data structure according to any selected column. The method has three arguments:
 
-   $hoh -> sort_hoh($sort_column, $sort_order, $sort_type);
+   my %sorted_hash = $hoh -> sort_hoh($sort_column, $sort_order, $sort_type) -> hoh;
 
 But you set these attributes in the L<Hoh> object itself. The L</sort_column> is the column used to determine
 the sort order of the hoh. The L</sort_order> is a boolean where 0 is ascending and 1 is descending. Finally,
 L</sort_type> is a boolean where 0 is numerical C<E<lt>=E<gt>> and 1 is lexicographical C<cmp>.
+
+=head2 statistics_log_bin
+
+This method creates a series of log-scale-spaced bins across the selected column data range.
+
+   my ($bin_col, $bins_per_decade, $cols_to_avg) = ('E', 30, [ qw(A B C D E) ] );
+   my %stats = $hoh -> statistics_log_bin($bin_col, $bins_per_decade, $cols_to_avg) -> statistics;
+
+The method takes three arguments. The scalar column to use for binning (required), the scalar number 
+of bins per decade (required), and the array_ref list of columns to average (defaults to all columns 
+if not specified). This statistics method and those that follow create a hash statistical data on each 
+of the bins: count, sum, mean, variance, standard deviation, sum of squares, and mean sum of squares. 
+These results of the binning (histogramming) process are recorded in the L</statistics> attribute, 
+which is a hash that is accessed as shown in the code example above. The keys to the hash are set as 
+'BIN'.$index where $index starts at zero and autoincrements.
+
+=head2 statistics_linear_bin
+
+This method creates a series of linear-scale-spaced bins across the selected column data range.
+
+   my $tolerance = 2;
+   my %stats = $hoh -> statistics_linear_bin($bin_col, $tolerance, $cols_to_avg) -> statistics;
+
+Here the tolerance argument of the method is the linear step size for each bin. For example, if the 
+data range in the column used for binning covers 1-100, then a tolerance value of 2 would create about 
+50 bins. The columns to average argument is like stated above in L</statistics_log_bin>. Again upon 
+execution, the resulting statistics are access in the L</statistics> attribute as shown above.
+
+=head2 statistics_bin_tolerance
+
+This method creates a series of bins across the selected column data range given a list of values to bin around
+and a tolerance. The method effectively reduces a dataset by binning and averaging data that fit within each
+of the bins set by the array ref, $bin, +/- the scalar tolerance $tol.
+
+   my $bins = [ 10, 20, 30, 40, 55 ];
+   my $tolerance = 1;
+   my %stats = $hoh -> statistics_bin_tolerance($bin_col, $bins, $tolerance, $cols_to_avg) -> statistics;
+
+The arguments are the same as above, where the new argument $bins is added (an array reference to a list of bin centers).
+Thus in this method data are binned based on the bin center and the tolerance as plus or minus the bin center. The bins
+will be in this example:
+
+   BIN1 9 - 11
+   BIN2 19 - 21
+   BIN3 29 - 31
+   BIN4 29 - 41
+   BIN5 54 - 56
+
+=head2 bin_search
+
+This method allows for statistical analysis of user selected bins. Using the case above, one could manually define the bins
+as:
+
+   @bins = (
+            [9, 11],
+            [19, 21],
+            [29, 31],
+            [29, 41],
+            [54, 56],
+           );
+   $hoh -> bins(@bins);
+   $hoh -> binned_column('X'); #setting the attribute to the binned column (data used to sort into bins)
+   my %stats = $hoh -> bin_search -> compute_statistics_on_bins -> statistics;
+
+Or the functional method call for this example is:
+
+   my %stats = $hoh -> bin_search(\@bins, 'X') -> compute_statistics_on_bins -> statistics;
+
+Thus with this method and arbitrary arrangement of bins can be constructed and analyzed. As noted in the above
+examples a second method, L</compute_statistics_on_bins>, was invoked to compute all the statistics. 
+The L</bin_search> method just dumps the data into the statistics hash initially. To get more advanced analysis
+(if you need it) you then invoke the L</compute_statistics_on_bins> method in series. The L</statistics> hash
+is modified appropriately.
+
+=head2 compute_statistics_on_bins
+
+This method is used in manual bin averaging of the data. It is called typically after a L</bin_search> method.
+See above code example for L</bin_search>.
+
+=head2 save_statistics
+
+Method that is called to save the L</statistics> to a formatted text file that is L<Hoh> compatible. There are
+four arguments:
+
+   $hoh -> save_statistics($file_out, $print_order, $stats_print_order, $delimiter);
+
+The first is the scalar for a C<path/to/file-out-name> (required), which can be specified in the <L/file_out> 
+attribute. The second is an array reference to the print order (not required), which as described above is
+the <L/print_order> attribute. The third is a statistics print order array reference (not required), which 
+is the order of particular statistical quanities that are to be printed in the flat file. The statistics hash 
+is larger than two-dimensions, and some ordering of the output is required to make it two-dimensional. 
+The default is C<['MEAN', 'STANDARD_DEVIATION']>, which yields the average of the column for that bin and the standard 
+deviation (error). Finally, the delimiter (not required) is also found in the L</delimiter> attribute. As always,
+these arguments can be left out if they were pre-set in the corresponding attributes.
+
+=head2 save_as_chimera_attribute
+
+This method is a way to convert a given column in the L</hoh> to a UCSF C<CHIMERA> attribute. 
+See L<http://www.cgl.ucsf.edu/chimera/> for information on the purpose of attributes. Note to use this script, 
+the input file must be specified with the residues listed as the keys in the first column. The file is loaded 
+with the L</generate_keys> attribute set to C<0>. Then a column with the attribute values is selected for export 
+to the attribute file. The output filename is generated from the chimera attribute name argument:
+
+   $hoh -> save_as_chimera_attribute($chimera_attribute_name, $col_with_attribute);
 
 =head1 AUTHOR
 
