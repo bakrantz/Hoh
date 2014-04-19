@@ -93,8 +93,9 @@ sub delete_columns {
    my $self = shift;
    my @cols = @_;
    my $hoh = +{ hoh($self) };   
-   foreach my $col (@cols) { 
-      foreach my $row (@{[keys(%$hoh)]}) { delete $hoh->{$row}->{$col} if defined($hoh -> {$row} -> {$col} };
+   foreach my $col (@cols) {
+      print "Deleting column(s): ".join(" ",@cols)."\n"; 
+      foreach my $row (@{[keys(%$hoh)]}) { delete $hoh->{$row}->{$col} if defined($hoh -> {$row} -> {$col}) };
    };
    hoh($self, %$hoh);
    extract_column_names($self);
@@ -368,7 +369,7 @@ sub generate_header_from_column_names {
  return $self
 }
 
-sub load { my $self = shift; open_hoh($self, @_); return $self}
+sub load { my $self = shift; open_hoh($self, @_); return $self }
 
 sub open_hoh { 
  my ($self, $file, $delimiter, $cs, $gen_keys) = @_; 
@@ -708,7 +709,7 @@ sub statistics_bin_tolerance {
  tolerance_bins($self, $bins, $tol);
  bin_search($self, [ bins($self) ], $bin_col);
  compute_statistics_on_bins($self); 
- return $self;
+ return $self
 }
 
 sub bin_search {
