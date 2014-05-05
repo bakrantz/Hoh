@@ -6,6 +6,7 @@
 #############   Module to manipulate datasets in hash of hashes format  #############
 #####################################################################################
 package Hoh;
+$VERSION = 0.33;
 ################################# THE CONSTRUCTOR ###################################
 sub new {
   my $proto                                 = shift;
@@ -16,6 +17,8 @@ sub new {
      $self->{STATISTICS}                    = {}; #Raw stats data from binning analysis
      $self->{STATISTICS_DATA}               = {}; #Stats data as hoh derived upon saving selected stats
      $self->{BIN_DATA}                      = {}; #hash of Bin Hohs
+     $self->{HISTOGRAM}                     = {}; #hash of current histogram (in hoh format)
+     $self->{CDF}                           = {}; #hash of current cdf (in hoh format)
      $self->{PRINT_ORDER}                   = []; #order data will be printed to outfile
      $self->{STATISTICS_PRINT_ORDER}        = ['MEAN', 'STANDARD_DEVIATION'];
      $self->{STATISTICS_COLUMNS_TO_ANALYZE} = [];    #list of columns to average, etc.
@@ -56,6 +59,10 @@ sub new {
      $self->{ORIGINAL_HEADER}               = undef; #prior header
      $self->{ORIGINAL_HEADER_LENGTH}        = undef; #length in lines
      $self->{FIRST_LINE}                    = undef; #first line of original file used to test file type
+
+     my %args = @_; #Dump arguments into hash if provided
+     while (my ($attribute, $value) = each %args) { $self -> {uc($attribute)} = $value };
+
   return bless($self, $package);                     #return thy self
 }
 ############################### METHOD SUBS ########################################
@@ -89,14 +96,21 @@ sub add_columns {
 #Alias
 sub add_column { add_columns(@_) } 
 
+#rename $old_col, $new_col as scalar names of columns
+sub rename_column {
+  my ($self, $old_col, $new_col) = @_;
+  my $hoh = +{ hoh($self) };
+  for my $row (keys(%$hoh)) { $hoh -> { $row } -> {  $new_col } = delete $hoh -> { $row } -> {  $old_col } };
+  hoh($self, %$hoh);  
+  extract_column_names($self);
+  return $self
+}
+
 sub delete_columns {
    my $self = shift;
    my @cols = @_;
    my $hoh = +{ hoh($self) };   
-   foreach my $col (@cols) {
-      print "Deleting column(s): ".join(" ",@cols)."\n"; 
-      foreach my $row (@{[keys(%$hoh)]}) { delete $hoh->{$row}->{$col} if defined($hoh -> {$row} -> {$col}) };
-   };
+   for my $col (@cols) { for my $row (@{[keys(%$hoh)]}) { delete $hoh->{$row}->{$col} if defined($hoh -> {$row} -> {$col}) } };
    hoh($self, %$hoh);
    extract_column_names($self);
    return $self
@@ -104,6 +118,37 @@ sub delete_columns {
 
 #Alias
 sub delete_column { delete_columns(@_) };
+
+# Remove row in hoh when numerical data in the hoh $col 
+# are exactly equal to the $values criteria 
+# where $col is a scalar and $values is an array ref.
+sub delete_row_by_value {
+  my ($self, $col, $values) = @_; 
+  my $hoh = +{ hoh($self) };
+  foreach my $rowkey (keys(%$hoh)) {
+      my $row = $hoh -> { $rowkey };
+      VALUEMATCH: foreach my $value (@$values) {
+        if ($row -> { $col } == $value) { delete $hoh -> { $rowkey }; last VALUEMATCH }
+      };
+  };
+
+ # TODO : delete the keys as required from the original_keys and sorted_keys array attributes
+
+  hoh($self, %$hoh);
+  return $self
+}
+
+#given a row key scalar delete that row from the hoh
+sub delete_row {
+  my ($self, $rowkey) = @_; 
+  my $hoh = +{ hoh($self) };
+  delete $hoh -> { $rowkey };
+
+ # TODO : delete the keys as required from the original_keys and sorted_keys array attributes
+
+  hoh($self, %$hoh);
+  return $self
+}
 
 #works in scalar or array mode
 sub clean_column_names {
@@ -113,9 +158,9 @@ sub clean_column_names {
  foreach my $dirty (@dirties) { $dirty =~ s/\W+//; push @$cleans, $dirty };
  #if key begins with a number, underscore or is undef, then add a letter 'A' in front
  foreach my $clean (@$cleans) { 
-   if    ($clean =~ /^\d/) { $clean = 'A'.$clean; print "CASE A\n"; } 
-   elsif ($clean =~ /^\_/) { $clean = 'A'.$clean; print "CASE B\n"; }
-   elsif ($clean eq '') { $clean = 'A'.$clean; print "CASE C\n"; }; 
+   if    ($clean =~ /^\d/) { $clean = 'A'.$clean } 
+   elsif ($clean =~ /^\_/) { $clean = 'A'.$clean }
+   elsif ($clean eq '')    { $clean = 'A'.$clean }; 
    push @$realcleans, $clean 
  };
  $reallycleans = [resolve_column_name_collisions(@$realcleans)];
@@ -186,11 +231,13 @@ sub column_math {
 #given a column name returns the list of values from the hoh according to the last sort using the method sort_hoh
 sub column {
  my ($self, $column_name) = @_;
- my $hoh = +{hoh($self)};
+ my $hoh = +{ hoh($self) };
  my @values;
- foreach my $key (sorted_keys($self)) {
-  push @values, $hoh->{$key}->{$column_name};
- };
+ my $keys   = [ sort { $a cmp $b } keys %$hoh ];
+ my $sorted = [ sorted_keys($self)   ];
+    $sorted = [ original_keys($self) ] unless scalar(@$sorted);
+    $sorted = $keys if (scalar(@$keys) != scalar($sorted));
+ foreach my $key (@$sorted) { push @values, $hoh->{$key}->{$column_name} };
  return @values
 }
 
@@ -207,7 +254,7 @@ sub save {
  $file = file_out($self) unless $file;
  $print_order = [ print_order($self) ] unless scalar(@$print_order);
  #add line here; if print order is missing then use column names after extracting them from the hoh
- print "No print order was specified in save routine, using column_names property instead" unless scalar(@$print_order);
+ print "No print order was specified in save routine, using column_names property instead\n" unless scalar(@$print_order);
  extract_column_names($self) unless scalar(@$print_order);
  $print_order = [ print_order($self, column_names($self)) ] unless scalar(@$print_order);
  die "Nothing to save. Hoh is empty, aborting $! $0" unless scalar(@$print_order);
@@ -256,10 +303,8 @@ sub preprocess_file {
  $preext =~ s/$ext$//;
  file_preextension($self,$preext); 
  my ($num_cols, $prob_num_cols, $first_line) = (column_number($self), probable_column_number($self), first_line($self));
- print "The probable number of columns is $prob_num_cols ... \n"; 
  unless ($num_cols) { $num_cols = $prob_num_cols; column_number($self,$num_cols) };
  # Test for various file types; e.g. test for ATF header and call ATF file to open properly
- print "File extension is ".file_extension($self)." and first line is $first_line ... \n";
  if (lc((file_extension($self)) eq '.atf') && ($first_line eq "ATF	1.0")) {
   # get column names for special case of T, I, V ATF file
   # last line of the header should have this line
@@ -302,7 +347,6 @@ sub preprocess_file {
   file_type($self, 'TEXT_AUTOCOLUMNS');  
  };
 };
- print "The file type is ".file_type($self)." ...\n";
  return $self
 }
 
@@ -337,7 +381,7 @@ sub extract_atf_header {
 
 sub test_header_for_columns {
  my ($h, $d, $bool) = (shift(), shift(), 1);
- $bool *= ($_ =~ /^[a-z]/i) for (split(/$d/,$h));
+ $bool *= ($_ =~ /^[a-z]/i) for ( @{ [ line_to_array($h, $d) ] } );
  return $bool
 }
 
@@ -373,7 +417,6 @@ sub load { my $self = shift; open_hoh($self, @_); return $self }
 
 sub open_hoh { 
  my ($self, $file, $delimiter, $cs, $gen_keys) = @_; 
- print "Opening $file ... \n";
  $delimiter = delimiter($self) unless $delimiter;
  $file      = file($self)      unless $file;
  $gen_keys  = generate_keys($self) unless $gen_keys;
@@ -514,8 +557,9 @@ sub sort_hoh {
 #Save as particular graphic style
 #parameters are hash
 # Graphics::Color::RGB->new(red => .95, green => .94, blue => .92, alpha => 1)
-# DATASETS => hash_ref of hash format X => Hoh Col Name, Y => Hoh Col Name, COLOR of set 
-#             (black, red, green, blue, cyan, magenta, yellow), STYLE => Point, Line, Step, Bar
+# DATASETS => hash_ref of hash format X => Hoh Col Name, Y => Hoh Col Name, 
+#              XERR => Hoh Col Name for X error bar (if used), YERR => Hoh col Name for Y error bar (if used),
+#              COLOR => (use Graphics::Color::RGB), STYLE => Point, Line, Step, Bar, ErrorBar
 # X_LABEL => x-axis label;  Y_LABEL => y-axis label;
 # FORMAT => 'pdf', 'png', 'svg'; 
 # FILE => output path/file name
@@ -559,7 +603,7 @@ sub create_xy_plot {
       $context->range_axis->tick_values($y_ticks);
       $context->domain_axis->tick_labels($x_ticks);
       $context->range_axis->tick_labels($y_ticks);
- print 'Autoscaling Chart::Clicker graph: x_ticks '.join(' ',@$x_ticks).' and y_ticks '.join(' ',@$y_ticks)."\n";
+
    my $x_tick_ends = [ $x_ticks->[0], $x_ticks->[-1] ];
    my $y_tick_ends = [ $y_ticks->[0], $y_ticks->[-1] ];
    #Due to quirks of Chart::Clicker need to add fake transparent dataset of ticks
@@ -567,16 +611,36 @@ sub create_xy_plot {
    my $ticks_dataset =  Chart::Clicker::Data::DataSet -> new( series => [ $ticks_series ] );
       $ticks_dataset -> context('default');
       $cc            -> add_to_datasets($ticks_dataset);
-   #some transparent color for the fake ticks dataset acting here as a means to make the ticks pretty
-   push @$colors, Graphics::Color::RGB->new(red => 0, green => 0, blue => 0, alpha => 0); 
+   push @$colors, Graphics::Color::RGB->new(red => 0, green => 0, blue => 0, alpha => 0); #some transparent color for the fake ticks
  };
 
  foreach my $key (keys(%$datasets_hash)) {
   push @$colors, $datasets_hash->{$key}->{'COLOR'};
   my ($x_col, $y_col) =  ($datasets_hash->{$key}->{'X'}, $datasets_hash->{$key}->{'Y'}); #extract $x_col and $y_col from Hoh to data arrays
+  my ($x_err_col, $y_err_col, $xerr, $yerr) = (undef, undef, [], []);
+     ($x_err_col, $y_err_col) = ($datasets_hash->{$key}->{'XERR'}, $datasets_hash->{$key}->{'YERR'}) 
+           if (uc($datasets_hash->{$key}->{'STYLE'}) eq 'ERRORBAR');
   sort_hoh($self, $x_col, 0 , 0); #sort according to x column first
   my ($x, $y) = ([column($self, $x_col)],[column($self, $y_col)]); #extract columns
-  my $series  =  Chart::Clicker::Data::Series  -> new( 'keys' => $x, 'values' => $y, 'name' => $y_col.' dataset' );
+  ($xerr, $yerr) = ([column($self,$x_err_col)],[column($self,$y_err_col)]) if (uc($datasets_hash->{$key}->{'STYLE'}) eq 'ERRORBAR');
+
+  my $series  =  Chart::Clicker::Data::Series  -> new( 
+						      'keys' => $x, 
+						      'values' => $y, 
+						      'name' => $y_col.' dataset' 
+						     );
+  
+  #if errors are to be plotted then use ErrorBar series
+  #if (uc($datasets_hash->{$key}->{'STYLE'}) eq 'ERRORBAR') {
+  #   $series  = Chart::Clicker::Data::Series::ErrorBar -> new( 
+#							      'keys' => $x, 
+#							      'values' => $y, 
+#							      'x_errors' => $xerr,
+#							      'y_errors' => $yerr,
+#							      'name' => $y_col.' dataset' 
+#							     )
+#   };
+
   my $dataset =  Chart::Clicker::Data::DataSet -> new( series => [ $series ] );
   my $new_context =  Chart::Clicker::Context->new(name => 'default'.$context_i);
      $dataset        -> context('default'.$context_i++);
@@ -663,6 +727,71 @@ sub find_autoscaled_ticks {
  return $ticks
 }
 
+#Compute cdf normalization of a data column from the Hoh
+#takes a scalar argument for the column name
+#stores the resulting CDF (cummulative distribution function)
+#in cdf property (as a hoh).
+sub statistics_cdf {
+ my ($self, $col) = @_;
+ $col = shift( @{ [ column_names($self) ] }) unless $col;
+ my ($cdf, $c) = ({}, [ sort { $a <=> $b } @{ [column($self, $col)] } ]);
+ $cdf -> { "CDF$_" } = { "$col" => $c -> [$_-1], 'CDF' => $_/scalar(@$c) } for (1..scalar(@$c));
+ cdf($self, %$cdf);
+ return $self
+}
+
+sub save_cdf {
+ my ($self, $file, $fileKeys) = @_;
+ open(FH,">$file") || die "$0 can't open $file using save_histogram method. $!";
+ my ($h, $d, $cr) = (+{ cdf($self) }, delimiter($self), chr(13).chr(10));
+ my $po = [ sort { $a cmp $b } keys %{ $h -> { [keys %$h] -> [0] } } ];
+ my $line = join($d, @$po).$cr unless $fileKeys;
+ $line = 'KEY'.$d.join($d, @$po).$cr if $fileKeys;
+ print FH $line;
+ foreach my $r (@{ [ sort { $h->{$a}->{$po->[0]} <=> $h->{$b}->{$po->[0]} } keys %$h ] }) {
+  $line = undef unless $fileKeys;
+  $line = $r.$d if $fileKeys;
+  $line .= $h->{$r}->{$_}.$d for @$po;
+  $line =~ s/$d$/$cr/;
+  print FH $line;
+ };
+ close(FH);
+ return $self
+}
+
+#Extracts a histogram, i.e. bin center (mean) and counts, as a hoh
+#Must be run after a statistics_x_bin method
+sub statistics_histogram {
+ my ($self, $col) = @_;
+ $col = shift( @{ [ column_names($self) ] }) unless $col;
+ my ($bin_data, $histogram) = (+{ statistics($self) }, {});
+ for my $bin (keys(%$bin_data)) {
+   $histogram -> { $bin } -> { 'COUNT' }  = $bin_data -> { $bin } -> { 'DATA' } -> { $col } -> { 'COUNT' };
+   $histogram -> { $bin } -> { 'MEAN' }   = $bin_data -> { $bin } -> { 'DATA' } -> { $col } -> { 'MEAN' };
+ };
+ histogram($self, %$histogram);
+ return $self
+}
+
+#Saves results of histogram 
+sub save_histogram {
+ my ($self, $file, $fileKeys) = @_;
+ open(FH,">$file") || die "$0 can't open $file using save_histogram method. $!";
+ my ($h, $d, $po, $cr) = (+{ histogram($self) }, delimiter($self), ['MEAN', 'COUNT'], chr(13).chr(10));
+ my $line = join($d, @$po).$cr unless $fileKeys;
+ $line = 'KEY'.$d.join($d, @$po).$cr if $fileKeys;
+ print FH $line;
+ foreach my $r (@{ [ sort { $h->{$a}->{$po->[0]} <=> $h->{$b}->{$po->[0]} } keys %$h ] }) {
+  $line = undef unless $fileKeys;
+  $line = $r.$d if $fileKeys;
+  $line .= $h->{$r}->{$_}.$d for @$po;
+  $line =~ s/$d$/$cr/;
+  print FH $line;
+ };
+ close(FH);
+ return $self
+}
+
 #typical log binning routine
 sub statistics_log_bin {
  my ($self, $bin_col, $bpd, $cols_to_avg) = @_;
@@ -719,7 +848,7 @@ sub bin_search {
   my $bin_val = $hohref -> {$key} -> {$bin_col};
   $bin_cnt = 0;
   foreach my $bin (@$bins) {  
-    if (($bin->[0] <= $bin_val) && ($bin->[1] >= $bin_val)) { 
+    if (($bin->[0] <= $bin_val) && ($bin->[1] > $bin_val)) { 
      #then key belongs to the bin put the keys on the chain for that bin
              $bin_hash -> {'BIN'.$bin_cnt} -> {BIN_COLUMN}             = $bin_col;
              $bin_hash -> {'BIN'.$bin_cnt} -> {BIN_COLUMNS_TO_AVERAGE} = $cols_to_avg;
@@ -927,12 +1056,12 @@ sub filetest {
   unless ($first_line) { $first_line_in =~ s/\s+$//; first_line($self, $first_line_in); $first_line++ };
   $cnt++
  };
- print "Filetest routine found $cnt lines in $file ... \n";
  #Randomly sample 20% of file for number of elements or columns per line
  if ($cnt < 100) { $samples = $cnt } else { $samples = int(0.2 * $cnt) };
  while ($samples--) {
   my $line = $output -> [int(rand()*$cnt)];
-  push @$cols_per_sample, scalar(split(/$delimiter/, $line));
+  my @row_array = line_to_array($line, $delimiter);
+  push @$cols_per_sample, scalar(@row_array);
  };
  $probable_hash->{$_}++ for @$cols_per_sample;
  probable_column_number($self, [ sort { $probable_hash->{$b} <=> $probable_hash->{$a} } keys %$probable_hash ] -> [0]);
@@ -986,8 +1115,14 @@ sub cs {
 }
 
 sub line_to_array {
- if ($_[1]) { return split(/\s*$_[1]\s*/, $_[0]) if $_[0] =~ /\s*$_[1]\s*/ }
- else       { return split(/\s+/, $_[0]) if $_[0] =~ /\s+/ };
+ if ($_[1]) { 
+   if ($_[0] =~ /\s*$_[1]\s*/) { return split(/\s*$_[1]\s*/, $_[0]) }
+   else { return $_[0] }
+ }
+ else { 
+   if ($_[0] =~ /\s+/) { return split(/\s+/, $_[0]) }
+   else { return $_[0] }
+ };
 }
 
 sub file_to_array { 
@@ -1045,6 +1180,18 @@ sub bin_data {
   my $self = shift;
   if (@_) { %{ $self->{BIN_DATA} } = @_ };
   return %{ $self->{BIN_DATA} };
+}
+
+sub histogram {
+  my $self = shift;
+  if (@_) { %{ $self->{HISTOGRAM} } = @_ };
+  return %{ $self->{HISTOGRAM} };
+}
+
+sub cdf {
+  my $self = shift;
+  if (@_) { %{ $self->{CDF} } = @_ };
+  return %{ $self->{CDF} };
 }
 
 #### ALL ARRAYS ####
@@ -1488,6 +1635,14 @@ Get/set this hash containing the column math equations. A recalculate routine ma
 be employed in the future to run through these in the order they were created. For now
 it just remembers the equations in this hash.
 
+=head2 cdf
+
+Get/set this hoh containing a computed cdf.
+
+=head2 histogram
+
+Get/set this hoh containing a computed histogram.
+
 =head2 statistics
 
 Get/set this multidimensional hash is the complete dataset of all statistics computed on the L</hoh> following
@@ -1496,7 +1651,7 @@ a binning method. The hash structure is complex.
  =head2 statistics_data
 
 Get/set this hash is a hash of hohs, containing the datasets of all statistical values computed in a binning
-analysis. This hash of hohs is useful for saving these data to a series of infividual flat files, or
+analysis. This hash of hohs is useful for saving these data to a series of individual flat files, or
 they may used in other routines.
 
 =head2 bin_data
@@ -1871,6 +2026,25 @@ But you set these attributes in the L<Hoh> object itself. The L</sort_column> is
 the sort order of the hoh. The L</sort_order> is a boolean where 0 is ascending and 1 is descending. Finally,
 L</sort_type> is a boolean where 0 is numerical C<E<lt>=E<gt>> and 1 is lexicographical C<cmp>.
 
+=head2 statistics_cdf
+
+This method will create a cummulative distribution function of the given column name. The 
+cdf hoh can be retreived from the L</cdf> attribute.
+
+   my $cdf = $hoh -> statistics_cdf('A') -> cdf;
+
+To save the cdf, use the L</save_cdf> method.
+
+=head2 statistics_histogram
+
+This method will create a histogram of the passed column name. This method should be run after a 
+L</statistics_linear_bin>, L</statistics_linear_bin>, or L</statistics_tolerance_bin> method is executed. The 
+histogram itself can be retreived from the L</histogram> attribute (which is stored as a hoh).
+
+   my $hist = $hoh ->  statistics_linear_bin('A', 1) -> statistics_histogram('A') -> histogram;
+
+To save the histogram, use the L</save_histogram> method.
+
 =head2 statistics_log_bin
 
 This method creates a series of log-scale-spaced bins across the selected column data range.
@@ -1948,6 +2122,18 @@ is modified appropriately.
 
 This method is used in manual bin averaging of the data. It is called typically after a L</bin_search> method.
 See above code example for L</bin_search>.
+
+=head2 save_cdf
+
+Saves the </cdf> hoh as a text file in the L<Hoh> module format. 
+
+   $hoh -> statistics_cdf('B') -> save_cdf('cdf_data.txt');
+
+=head2 save_histogram
+
+Saves the </histogram> hoh as a text file in the L<Hoh> module format.
+
+   $hoh -> statistics_histogram('B') -> save_histogram('histogram.txt');
 
 =head2 save_statistics
 
