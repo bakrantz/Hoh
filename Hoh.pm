@@ -6,7 +6,7 @@
 #############   Module to manipulate datasets in hash of hashes format  #############
 #####################################################################################
 package Hoh;
-$VERSION = 0.33;
+$VERSION = 0.35;
 ################################# THE CONSTRUCTOR ###################################
 sub new {
   my $proto                                 = shift;
@@ -71,10 +71,8 @@ sub new {
 #arg1 = col; arg2 = scalar
 sub add_scalar_column { 
   my ($self, $col, $scalar) = @_;
-  my $hoh = +{ hoh($self) };
   $col = clean_column_names($col);
-  $hoh -> {$_} -> {$col} = $scalar for @{[keys(%$hoh)]};
-  hoh($self, %$hoh);
+  $self -> {'HOH'} -> {$_} -> {$col} = $scalar for @{[keys(%{ $self -> {'HOH'} })]};
   extract_column_names($self);
   return $self
 }
@@ -82,13 +80,10 @@ sub add_scalar_column {
 #Adds one or more empty columns but if column exists it does not overwrite or blank or delete
 sub add_columns { 
   my $self = shift; 
-  my @cols = @_;
-  my $hoh = +{ hoh($self) };
-  foreach my $col (@cols) { 
-   $col = clean_column_names($col);
-   foreach my $row (@{[keys(%$hoh)]}) { $hoh -> {$row} -> {$col} = undef unless defined($hoh -> {$row} -> {$col}) } 
+  for (@_) { 
+   my $col = clean_column_names($_);
+   for (keys %{$self->{'HOH'}}) { $self->{'HOH'}->{$_}->{$col} = undef unless defined($self->{'HOH'}->{$_}->{$col}) }; 
   };
-  hoh($self, %$hoh);
   extract_column_names($self);
   return $self
 }
@@ -99,19 +94,14 @@ sub add_column { add_columns(@_) }
 #rename $old_col, $new_col as scalar names of columns
 sub rename_column {
   my ($self, $old_col, $new_col) = @_;
-  my $hoh = +{ hoh($self) };
-  for my $row (keys(%$hoh)) { $hoh -> { $row } -> {  $new_col } = delete $hoh -> { $row } -> {  $old_col } };
-  hoh($self, %$hoh);  
+  $self->{'HOH'}->{$_}->{$new_col} = delete $self->{'HOH'}->{$_}->{$old_col} for (keys(%{$self->{'HOH'}}));
   extract_column_names($self);
   return $self
 }
 
 sub delete_columns {
-   my $self = shift;
-   my @cols = @_;
-   my $hoh = +{ hoh($self) };   
-   for my $col (@cols) { for my $row (@{[keys(%$hoh)]}) { delete $hoh->{$row}->{$col} if defined($hoh -> {$row} -> {$col}) } };
-   hoh($self, %$hoh);
+   my $self = shift; 
+   for my $col (@_) { for (keys %{$self->{'HOH'}}) { delete $self->{'HOH'}->{$_}->{$col} if defined($self->{'HOH'}->{$_}->{$col}) } };
    extract_column_names($self);
    return $self
 }
@@ -119,34 +109,28 @@ sub delete_columns {
 #Alias
 sub delete_column { delete_columns(@_) };
 
-# Remove row in hoh when numerical data in the hoh $col 
 # are exactly equal to the $values criteria 
 # where $col is a scalar and $values is an array ref.
 sub delete_row_by_value {
   my ($self, $col, $values) = @_; 
-  my $hoh = +{ hoh($self) };
-  foreach my $rowkey (keys(%$hoh)) {
-      my $row = $hoh -> { $rowkey };
-      VALUEMATCH: foreach my $value (@$values) {
-        if ($row -> { $col } == $value) { delete $hoh -> { $rowkey }; last VALUEMATCH }
+  foreach my $rowkey (keys %{$self->{'HOH'}}) {
+    my $row = $self->{'HOH'}->{$rowkey};
+    VALUEMATCH: for (@$values) {
+      if ($row->{$col} == $_) {
+        delete $self->{'HOH'}->{$rowkey};  
+        last VALUEMATCH 
       };
+    };
   };
-
- # TODO : delete the keys as required from the original_keys and sorted_keys array attributes
-
-  hoh($self, %$hoh);
+# TODO : delete the keys as required from the original_keys and sorted_keys array attributes
   return $self
 }
 
 #given a row key scalar delete that row from the hoh
 sub delete_row {
-  my ($self, $rowkey) = @_; 
-  my $hoh = +{ hoh($self) };
-  delete $hoh -> { $rowkey };
-
- # TODO : delete the keys as required from the original_keys and sorted_keys array attributes
-
-  hoh($self, %$hoh);
+  my $self = shift; 
+  delete  $self->{'HOH'}->{$_} for (@_);
+# TODO : delete the keys as required from the original_keys and sorted_keys array attributes
   return $self
 }
 
